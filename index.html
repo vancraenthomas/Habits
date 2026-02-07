@@ -156,16 +156,14 @@ function getUserTabName(){
 
 async function syncToSheet(){
   if(!getSheetUrl())return;
-  syncStatus="syncing";render();
+  syncStatus="syncing";
   try{
-    // Save user state to their tab
     await sheetPost({action:"write",tab:getUserTabName(),key:"state",value:state});
-    // Save users list to _meta tab
     await sheetPost({action:"writeUsers",value:users});
     syncStatus="synced";lastSyncTime=Date.now();
   }catch(e){syncStatus="error";console.error("Sync error:",e);}
-  render();
-  setTimeout(()=>{if(syncStatus==="synced"){syncStatus="";render();}},2000);
+  // Quietly clear status after a bit — no render to avoid flicker
+  setTimeout(()=>{syncStatus="";},3000);
 }
 
 async function loadFromSheet(){
@@ -225,7 +223,7 @@ let activeUser=getActiveUserId();
 function userKey(){return "habits-"+activeUser;}
 function themeKey(){return "habits-theme-"+activeUser;}
 let _syncTimer=null;
-function save(){try{localStorage.setItem(userKey(),JSON.stringify(state));}catch{} clearTimeout(_syncTimer);_syncTimer=setTimeout(syncToSheet,1500);}
+function save(){try{localStorage.setItem(userKey(),JSON.stringify(state));}catch{} clearTimeout(_syncTimer);_syncTimer=setTimeout(syncToSheet,3000);}
 function saveLocal(){try{localStorage.setItem(userKey(),JSON.stringify(state));}catch{}}
 function loadUserState(){
   state={entries:{},fvList:[...DEF_FV],goals:[],custom:{}};
@@ -288,12 +286,16 @@ function isEntryEmpty(cat,data){
   if(cat.startsWith("custom_")){return Object.values(data).every(v=>!v);}
   return Object.values(data).every(v=>!v);
 }
-function setE(cat,data){
+function setE(cat,data,noRender){
   const key=`${fmt(selDate)}_${cat}`;
   if(isEntryEmpty(cat,data))delete state.entries[key];
   else state.entries[key]=data;
-  save();render();
+  save();
+  if(!noRender)render();
 }
+window._setE=function(cat,data){setE(cat,data);};
+window._setEQuiet=function(cat,data){setE(cat,data,true);};
+window._getE=function(cat){return getE(cat);};
 function allCats(){const c={...CATS};Object.entries(state.custom).forEach(([id,h])=>{c[id]={...h,builtin:0};});return c;}
 function catList(){return Object.keys(allCats()).filter(c=>c!=="goals");}
 function avg(a){const f=a.filter(v=>v>0);return f.length?f.reduce((x,y)=>x+y,0)/f.length:0;}
@@ -376,22 +378,24 @@ function getSummary(cat,data){
 
 // ─── Form Renderers ───
 function timeRange(from,to,onF,onT){return `<div style="display:flex;gap:8px;align-items:center"><input type="time" class="input" value="${from||""}" onchange="${onF}"><span style="color:var(--accent2)">→</span><input type="time" class="input" value="${to||""}" onchange="${onT}"></div>`;}
-function hoursInput(val,onChange,label){return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${label}</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${val||""}" placeholder="0" onchange="${onChange}"><span style="color:var(--text4);font-size:12px">hrs</span></div>`;}
+function hoursInput(val,onChange,label){return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${label}</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${val||""}" placeholder="0" oninput="${onChange}"><span style="color:var(--text4);font-size:12px">hrs</span></div>`;}
 function pillBtn(text,active,color,onclick){const bc=active?color:"var(--input-border)";const bg=active?color+"1A":"rgba(30,41,59,0.5)";const cl=active?color:"var(--text3)";return `<button class="pill" style="border-color:${bc};background:${bg};color:${cl}" onclick="${onclick}">${active?"✓ ":""}${text}</button>`;}
 function toggleBtn(val,onclick,color){color=color||"var(--green)";const bc=val?color:"var(--input-border)";const bg=val?color+"1A":"rgba(30,41,59,0.5)";const cl=val?color:"var(--text4)";return `<button class="pill" style="border-color:${bc};background:${bg};color:${cl}" onclick="${onclick}">${val?"✓ Yes":"No"}</button>`;}
 
 function renderForm(cat){
   const d=getE(cat)||{};const esc=s=>(s||"").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
   const sE=(k,expr)=>`(function(){let d=window._getE('${cat}')||{};d['${k}']=${expr};window._setE('${cat}',d);})()`;
+  const sEQ=(k,expr)=>`(function(){let d=window._getE('${cat}')||{};d['${k}']=${expr};window._setEQuiet('${cat}',d);})()`;
+  const sEBlur=`window._setE('${cat}',window._getE('${cat}'))`;
 
-  if(cat==="sport") return `<div class="form-grid"><input class="input" value="${esc(d.type)}" placeholder="Activity (e.g. gym, running, yoga)" onchange="${sE("type","this.value")}">${timeRange(d.from,d.to,sE("from","this.value"),sE("to","this.value"))}${hoursInput(d.duration,sE("duration","this.value"),"Duration:")}<input class="input" value="${esc(d.notes)}" placeholder="Notes..." onchange="${sE("notes","this.value")}"></div>`;
-  if(cat==="sleep") return `<div class="form-grid">${timeRange(d.from,d.to,sE("from","this.value"),sE("to","this.value"))}${hoursInput(d.hours,sE("hours","this.value"),"Total hours:")}<select class="input" onchange="${sE("quality","this.value")}"><option value="" ${!d.quality?"selected":""}>Sleep quality...</option><option value="great" ${d.quality==="great"?"selected":""}>😴 Great</option><option value="good" ${d.quality==="good"?"selected":""}>🙂 Good</option><option value="okay" ${d.quality==="okay"?"selected":""}>😐 Okay</option><option value="poor" ${d.quality==="poor"?"selected":""}>😔 Poor</option><option value="terrible" ${d.quality==="terrible"?"selected":""}>😢 Terrible</option></select></div>`;
-  if(cat==="productivity") return `<div class="form-grid">${timeRange(d.from,d.to,sE("from","this.value"),sE("to","this.value"))}${hoursInput(d.hours,sE("hours","this.value"),"Hours:")}<input class="input" value="${esc(d.tasks)}" placeholder="What did you work on?" onchange="${sE("tasks","this.value")}"></div>`;
-  if(cat==="brainrot") return `<div class="form-grid">${hoursInput(d.hours,sE("hours","this.value"),"Hours wasted:")}<input class="input" value="${esc(d.platform)}" placeholder="Platform (TikTok, Instagram, YouTube...)" onchange="${sE("platform","this.value")}"><input class="input" value="${esc(d.notes)}" placeholder="Notes..." onchange="${sE("notes","this.value")}"></div>`;
-  if(cat==="food"){const fvs=d.fruitsVegs||[];const fvHtml=state.fvList.map(item=>{const a=fvs.includes(item);return pillBtn(item,a,"var(--accent)",`window._toggleFV('${item}')`);}).join("");return `<div class="form-grid"><div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">Shake today?</span>${toggleBtn(d.shake,sE("shake","!("+JSON.stringify(!!d.shake)+")"))}</div><div><span class="label" style="margin-bottom:8px">Fruits & Vegetables</span><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${fvHtml}</div><div style="display:flex;gap:6px"><input class="input" style="flex:1" id="newFV" placeholder="Add new..." onkeydown="if(event.key==='Enter')window._addFV()"><button class="btn-sm" onclick="window._addFV()">+</button></div></div><input class="input" value="${esc(d.meals)}" placeholder="Other meals / notes..." onchange="${sE("meals","this.value")}"></div>`;}
-  if(cat==="feelings"){const fBtns=FEELS.map(f=>pillBtn(f,d.feeling===f,"var(--yellow)",`(function(){let d=window._getE('feelings')||{};d.feeling='${f}';window._setE('feelings',d);})()`)).join("");const eBtns=ENRGY.map(e=>pillBtn(e,d.energy===e,"var(--accent)",`(function(){let d=window._getE('feelings')||{};d.energy='${e}';window._setE('feelings',d);})()`)).join("");return `<div class="form-grid"><div><span class="label" style="margin-bottom:8px">How are you feeling?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${fBtns}</div></div><div><span class="label" style="margin-bottom:8px">Energy level?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${eBtns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Journal / notes..." onchange="${sE("notes","this.value")}"></div>`;}
-  if(cat==="medical"){const visits=d.visits||{};const btns=MEDICAL.map(m=>{const a=!!visits[m.id];return pillBtn(m.l,a,"var(--pink)",`(function(){let d=window._getE('medical')||{visits:{}};if(!d.visits)d.visits={};d.visits['${m.id}']=!d.visits['${m.id}'];window._setE('medical',d);})()`);}).join("");return `<div class="form-grid"><div><span class="label" style="margin-bottom:10px">Appointments today:</span><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Medical notes..." onchange="${sE("notes","this.value")}"></div>`;}
-  if(cat.startsWith("custom_")&&state.custom[cat]){const h=state.custom[cat];return `<div class="form-grid">${h.variables.map((v,i)=>{const k=v.name||"var_"+i;const esc_k=k.replace(/'/g,"\\'");const sV=(expr)=>`(function(){let d=window._getE('${cat}')||{};d['${esc_k}']=${expr};window._setE('${cat}',d);})()`;if(v.type==="timeRange")return `<div><span class="label">${v.name}</span>${timeRange(d[k+"_from"],d[k+"_to"],`(function(){let d=window._getE('${cat}')||{};d['${esc_k}_from']=this.value;window._setE('${cat}',d);})()`,`(function(){let d=window._getE('${cat}')||{};d['${esc_k}_to']=this.value;window._setE('${cat}',d);})()`)}</div>`;if(v.type==="duration")return hoursInput(d[k],sV("this.value"),v.name+":");if(v.type==="text")return `<input class="input" value="${esc(d[k])}" placeholder="${v.name}" onchange="${sV("this.value")}">`;if(v.type==="number")return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${v.name}</span><input type="number" class="input" style="width:90px" value="${d[k]||""}" placeholder="0" onchange="${sV("this.value")}"></div>`;if(v.type==="yesno")return `<div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">${v.name}</span>${toggleBtn(d[k],sV("!"+JSON.stringify(!!d[k])))}</div>`;if(v.type==="rating")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px">${[1,2,3,4,5].map(n=>`<button style="width:36px;height:36px;border-radius:10px;border:1px solid ${d[k]>=n?"var(--yellow)":"var(--input-border)"};background:${d[k]>=n?"rgba(255,217,61,0.15)":"rgba(30,41,59,0.5)"};color:${d[k]>=n?"var(--yellow)":"var(--text5)"};cursor:pointer;font-size:14px;font-weight:600" onclick="${sV(n)}">${n}</button>`).join("")}</div></div>`;if(v.type==="select")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px;flex-wrap:wrap">${(v.options||[]).map(opt=>pillBtn(opt,d[k]===opt,"var(--accent)",sV("'"+opt.replace(/'/g,"\\'")+"'"))).join("")}</div></div>`;return"";}).join("")}</div>`;}
+  if(cat==="sport") return `<div class="form-grid"><input class="input" value="${esc(d.type)}" placeholder="Activity (e.g. gym, running, yoga)" oninput="${sEQ("type","this.value")}" onblur="${sEBlur}">${timeRange(d.from,d.to,sE("from","this.value"),sE("to","this.value"))}${hoursInput(d.duration,sEQ("duration","this.value"),"Duration:")}<input class="input" value="${esc(d.notes)}" placeholder="Notes..." oninput="${sEQ("notes","this.value")}" onblur="${sEBlur}"></div>`;
+  if(cat==="sleep") return `<div class="form-grid">${timeRange(d.from,d.to,sE("from","this.value"),sE("to","this.value"))}${hoursInput(d.hours,sEQ("hours","this.value"),"Total hours:")}<select class="input" onchange="${sE("quality","this.value")}"><option value="" ${!d.quality?"selected":""}>Sleep quality...</option><option value="great" ${d.quality==="great"?"selected":""}>😴 Great</option><option value="good" ${d.quality==="good"?"selected":""}>🙂 Good</option><option value="okay" ${d.quality==="okay"?"selected":""}>😐 Okay</option><option value="poor" ${d.quality==="poor"?"selected":""}>😔 Poor</option><option value="terrible" ${d.quality==="terrible"?"selected":""}>😢 Terrible</option></select></div>`;
+  if(cat==="productivity") return `<div class="form-grid">${timeRange(d.from,d.to,sE("from","this.value"),sE("to","this.value"))}${hoursInput(d.hours,sEQ("hours","this.value"),"Hours:")}<input class="input" value="${esc(d.tasks)}" placeholder="What did you work on?" oninput="${sEQ("tasks","this.value")}" onblur="${sEBlur}"></div>`;
+  if(cat==="brainrot") return `<div class="form-grid">${hoursInput(d.hours,sEQ("hours","this.value"),"Hours wasted:")}<input class="input" value="${esc(d.platform)}" placeholder="Platform (TikTok, Instagram, YouTube...)" oninput="${sEQ("platform","this.value")}" onblur="${sEBlur}"><input class="input" value="${esc(d.notes)}" placeholder="Notes..." oninput="${sEQ("notes","this.value")}" onblur="${sEBlur}"></div>`;
+  if(cat==="food"){const fvs=d.fruitsVegs||[];const fvHtml=state.fvList.map(item=>{const a=fvs.includes(item);return pillBtn(item,a,"var(--accent)",`window._toggleFV('${item}')`);}).join("");return `<div class="form-grid"><div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">Shake today?</span>${toggleBtn(d.shake,sE("shake","!("+JSON.stringify(!!d.shake)+")"))}</div><div><span class="label" style="margin-bottom:8px">Fruits & Vegetables</span><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${fvHtml}</div><div style="display:flex;gap:6px"><input class="input" style="flex:1" id="newFV" placeholder="Add new..." onkeydown="if(event.key==='Enter')window._addFV()"><button class="btn-sm" onclick="window._addFV()">+</button></div></div><input class="input" value="${esc(d.meals)}" placeholder="Other meals / notes..." oninput="${sEQ("meals","this.value")}" onblur="${sEBlur}"></div>`;}
+  if(cat==="feelings"){const fBtns=FEELS.map(f=>pillBtn(f,d.feeling===f,"var(--yellow)",`(function(){let d=window._getE('feelings')||{};d.feeling='${f}';window._setE('feelings',d);})()`)).join("");const eBtns=ENRGY.map(e=>pillBtn(e,d.energy===e,"var(--accent)",`(function(){let d=window._getE('feelings')||{};d.energy='${e}';window._setE('feelings',d);})()`)).join("");return `<div class="form-grid"><div><span class="label" style="margin-bottom:8px">How are you feeling?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${fBtns}</div></div><div><span class="label" style="margin-bottom:8px">Energy level?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${eBtns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Journal / notes..." oninput="${sEQ("notes","this.value")}" onblur="${sEBlur}"></div>`;}
+  if(cat==="medical"){const visits=d.visits||{};const btns=MEDICAL.map(m=>{const a=!!visits[m.id];return pillBtn(m.l,a,"var(--pink)",`(function(){let d=window._getE('medical')||{visits:{}};if(!d.visits)d.visits={};d.visits['${m.id}']=!d.visits['${m.id}'];window._setE('medical',d);})()`);}).join("");return `<div class="form-grid"><div><span class="label" style="margin-bottom:10px">Appointments today:</span><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Medical notes..." oninput="${sEQ("notes","this.value")}" onblur="${sEBlur}"></div>`;}
+  if(cat.startsWith("custom_")&&state.custom[cat]){const h=state.custom[cat];const sBlur=sEBlur;return `<div class="form-grid">${h.variables.map((v,i)=>{const k=v.name||"var_"+i;const esc_k=k.replace(/'/g,"\\'");const sV=(expr)=>`(function(){let d=window._getE('${cat}')||{};d['${esc_k}']=${expr};window._setE('${cat}',d);})()`;const sVQ=(expr)=>`(function(){let d=window._getE('${cat}')||{};d['${esc_k}']=${expr};window._setEQuiet('${cat}',d);})()`;if(v.type==="timeRange")return `<div><span class="label">${v.name}</span>${timeRange(d[k+"_from"],d[k+"_to"],`(function(){let d=window._getE('${cat}')||{};d['${esc_k}_from']=this.value;window._setE('${cat}',d);})()`,`(function(){let d=window._getE('${cat}')||{};d['${esc_k}_to']=this.value;window._setE('${cat}',d);})()`)}</div>`;if(v.type==="duration")return hoursInput(d[k],sVQ("this.value"),v.name+":");if(v.type==="text")return `<input class="input" value="${esc(d[k])}" placeholder="${v.name}" oninput="${sVQ("this.value")}" onblur="${sBlur}">`;if(v.type==="number")return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${v.name}</span><input type="number" class="input" style="width:90px" value="${d[k]||""}" placeholder="0" oninput="${sVQ("this.value")}" onblur="${sBlur}"></div>`;if(v.type==="yesno")return `<div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">${v.name}</span>${toggleBtn(d[k],sV("!"+JSON.stringify(!!d[k])))}</div>`;if(v.type==="rating")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px">${[1,2,3,4,5].map(n=>`<button style="width:36px;height:36px;border-radius:10px;border:1px solid ${d[k]>=n?"var(--yellow)":"var(--input-border)"};background:${d[k]>=n?"rgba(255,217,61,0.15)":"rgba(30,41,59,0.5)"};color:${d[k]>=n?"var(--yellow)":"var(--text5)"};cursor:pointer;font-size:14px;font-weight:600" onclick="${sV(n)}">${n}</button>`).join("")}</div></div>`;if(v.type==="select")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px;flex-wrap:wrap">${(v.options||[]).map(opt=>pillBtn(opt,d[k]===opt,"var(--accent)",sV("'"+opt.replace(/'/g,"\\'")+"'"))).join("")}</div></div>`;return"";}).join("")}</div>`;}
   return"";
 }
 // ─── Analytics ───
@@ -710,8 +714,7 @@ function render(){
 
 // ─── Event handlers ───
 let modalVars=[];
-window._getE=function(cat){return getE(cat);};
-window._setE=function(cat,data){setE(cat,data);};
+// (handlers defined above with setE)
 window._toggleFV=function(item){const d=getE("food")||{shake:false,fruitsVegs:[]};const l=d.fruitsVegs||[];d.fruitsVegs=l.includes(item)?l.filter(x=>x!==item):[...l,item];setE("food",d);};
 window._addFV=function(){const inp=document.getElementById("newFV");if(!inp)return;const t=inp.value.trim();if(!t)return;if(!state.fvList.includes(t))state.fvList.push(t);const d=getE("food")||{shake:false,fruitsVegs:[]};if(!d.fruitsVegs)d.fruitsVegs=[];if(!d.fruitsVegs.includes(t))d.fruitsVegs.push(t);setE("food",d);};
 window._addGoal=function(){const inp=document.getElementById("goalInput");if(!inp)return;const t=inp.value.trim();if(!t)return;state.goals.push({text:t,done:false});save();render();};
