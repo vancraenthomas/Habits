@@ -286,22 +286,37 @@ function isEntryEmpty(cat,data){
   if(cat.startsWith("custom_")){return Object.values(data).every(v=>!v);}
   return Object.values(data).every(v=>!v);
 }
-function setE(cat,data,noRender,force){
+function setE(cat,data){
   const key=`${fmt(selDate)}_${cat}`;
   if(isEntryEmpty(cat,data))delete state.entries[key];
   else state.entries[key]=data;
   save();
-  if(!noRender)render(force);
 }
-// _setE with forced render — for buttons/toggles/selects
-window._setE=function(cat,data){setE(cat,data,false,true);};
-// _setEQuiet — for typing in inputs (no DOM rebuild)
-window._setEQuiet=function(cat,data){setE(cat,data,true);};
+// Draft system: forms edit a draft, save button commits
+let _draft={};
+let _draftCat=null;
+window._getD=function(cat){
+  if(_draftCat!==cat||!_draft){_draftCat=cat;_draft={...(getE(cat)||{})};}
+  return _draft;
+};
+window._setD=function(cat,key,val){
+  if(_draftCat!==cat){_draftCat=cat;_draft={...(getE(cat)||{})};}
+  _draft[key]=val;
+};
+window._setDNested=function(cat,key,subkey,val){
+  if(_draftCat!==cat){_draftCat=cat;_draft={...(getE(cat)||{})};}
+  if(!_draft[key])_draft[key]={};
+  _draft[key][subkey]=val;
+};
+window._saveDraft=function(cat){
+  setE(cat,{..._draft});
+  _draft={};_draftCat=null;
+  render(true);
+};
+// For buttons that need instant visual feedback AND save (feelings, toggles)
+window._setE=function(cat,data){setE(cat,data);render(true);};
 window._getE=function(cat){return getE(cat);};
 
-// Track which form body is currently rendered to avoid rebuilding it
-let _renderedFormCat=null;
-let _renderedFormDate=null;
 function allCats(){const c={...CATS};Object.entries(state.custom).forEach(([id,h])=>{c[id]={...h,builtin:0};});return c;}
 function catList(){return Object.keys(allCats()).filter(c=>c!=="goals");}
 function avg(a){const f=a.filter(v=>v>0);return f.length?f.reduce((x,y)=>x+y,0)/f.length:0;}
@@ -389,18 +404,58 @@ function pillBtn(text,active,color,onclick){const bc=active?color:"var(--input-b
 function toggleBtn(val,onclick,color){color=color||"var(--green)";const bc=val?color:"var(--input-border)";const bg=val?color+"1A":"rgba(30,41,59,0.5)";const cl=val?color:"var(--text4)";return `<button class="pill" style="border-color:${bc};background:${bg};color:${cl}" onclick="${onclick}">${val?"✓ Yes":"No"}</button>`;}
 
 function renderForm(cat){
-  const d=getE(cat)||{};const esc=s=>(s||"").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
-  const sE=(k,expr)=>`(function(){let d=window._getE('${cat}')||{};d['${k}']=${expr};window._setE('${cat}',d);})()`;
-  const sEQ=(k,expr)=>`(function(){let d=window._getE('${cat}')||{};d['${k}']=${expr};window._setEQuiet('${cat}',d);})()`;
+  // Initialize draft from saved data
+  _draftCat=cat;_draft={...(getE(cat)||{})};
+  const d=_draft;const esc=s=>(s||"").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  const sD=(k)=>`window._setD('${cat}','${k}',this.value)`;
+  const saveBtn=`<button style="width:100%;padding:10px 0;border-radius:10px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent3));color:#0F172A;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px" onclick="window._saveDraft('${cat}')">💾 Save</button>`;
 
-  if(cat==="sport") return `<div class="form-grid"><input class="input" value="${esc(d.type)}" placeholder="Activity (e.g. gym, running, yoga)" oninput="${sEQ("type","this.value")}">${timeRange(d.from,d.to,sEQ("from","this.value"),sEQ("to","this.value"))}${hoursInput(d.duration,sEQ("duration","this.value"),"Duration:")}<input class="input" value="${esc(d.notes)}" placeholder="Notes..." oninput="${sEQ("notes","this.value")}"></div>`;
-  if(cat==="sleep") return `<div class="form-grid">${timeRange(d.from,d.to,sEQ("from","this.value"),sEQ("to","this.value"))}${hoursInput(d.hours,sEQ("hours","this.value"),"Total hours:")}<select class="input" onchange="${sEQ("quality","this.value")}"><option value="" ${!d.quality?"selected":""}>Sleep quality...</option><option value="great" ${d.quality==="great"?"selected":""}>😴 Great</option><option value="good" ${d.quality==="good"?"selected":""}>🙂 Good</option><option value="okay" ${d.quality==="okay"?"selected":""}>😐 Okay</option><option value="poor" ${d.quality==="poor"?"selected":""}>😔 Poor</option><option value="terrible" ${d.quality==="terrible"?"selected":""}>😢 Terrible</option></select></div>`;
-  if(cat==="productivity") return `<div class="form-grid">${timeRange(d.from,d.to,sEQ("from","this.value"),sEQ("to","this.value"))}${hoursInput(d.hours,sEQ("hours","this.value"),"Hours:")}<input class="input" value="${esc(d.tasks)}" placeholder="What did you work on?" oninput="${sEQ("tasks","this.value")}"></div>`;
-  if(cat==="brainrot") return `<div class="form-grid">${hoursInput(d.hours,sEQ("hours","this.value"),"Hours wasted:")}<input class="input" value="${esc(d.platform)}" placeholder="Platform (TikTok, Instagram, YouTube...)" oninput="${sEQ("platform","this.value")}"><input class="input" value="${esc(d.notes)}" placeholder="Notes..." oninput="${sEQ("notes","this.value")}"></div>`;
-  if(cat==="food"){const fvs=d.fruitsVegs||[];const fvHtml=state.fvList.map(item=>{const a=fvs.includes(item);return pillBtn(item,a,"var(--accent)",`window._toggleFV('${item}')`);}).join("");return `<div class="form-grid"><div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">Shake today?</span>${toggleBtn(d.shake,sE("shake","!("+JSON.stringify(!!d.shake)+")"))}</div><div><span class="label" style="margin-bottom:8px">Fruits & Vegetables</span><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${fvHtml}</div><div style="display:flex;gap:6px"><input class="input" style="flex:1" id="newFV" placeholder="Add new..." onkeydown="if(event.key==='Enter')window._addFV()"><button class="btn-sm" onclick="window._addFV()">+</button></div></div><input class="input" value="${esc(d.meals)}" placeholder="Other meals / notes..." oninput="${sEQ("meals","this.value")}"></div>`;}
-  if(cat==="feelings"){const fBtns=FEELS.map(f=>pillBtn(f,d.feeling===f,"var(--yellow)",`(function(){let d=window._getE('feelings')||{};d.feeling='${f}';window._setE('feelings',d);})()`)).join("");const eBtns=ENRGY.map(e=>pillBtn(e,d.energy===e,"var(--accent)",`(function(){let d=window._getE('feelings')||{};d.energy='${e}';window._setE('feelings',d);})()`)).join("");return `<div class="form-grid"><div><span class="label" style="margin-bottom:8px">How are you feeling?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${fBtns}</div></div><div><span class="label" style="margin-bottom:8px">Energy level?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${eBtns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Journal / notes..." oninput="${sEQ("notes","this.value")}"></div>`;}
-  if(cat==="medical"){const visits=d.visits||{};const btns=MEDICAL.map(m=>{const a=!!visits[m.id];return pillBtn(m.l,a,"var(--pink)",`(function(){let d=window._getE('medical')||{visits:{}};if(!d.visits)d.visits={};d.visits['${m.id}']=!d.visits['${m.id}'];window._setE('medical',d);})()`);}).join("");return `<div class="form-grid"><div><span class="label" style="margin-bottom:10px">Appointments today:</span><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Medical notes..." oninput="${sEQ("notes","this.value")}"></div>`;}
-  if(cat.startsWith("custom_")&&state.custom[cat]){const h=state.custom[cat];return `<div class="form-grid">${h.variables.map((v,i)=>{const k=v.name||"var_"+i;const esc_k=k.replace(/'/g,"\\'");const sV=(expr)=>`(function(){let d=window._getE('${cat}')||{};d['${esc_k}']=${expr};window._setE('${cat}',d);})()`;const sVQ=(expr)=>`(function(){let d=window._getE('${cat}')||{};d['${esc_k}']=${expr};window._setEQuiet('${cat}',d);})()`;if(v.type==="timeRange")return `<div><span class="label">${v.name}</span>${timeRange(d[k+"_from"],d[k+"_to"],`(function(){let d=window._getE('${cat}')||{};d['${esc_k}_from']=this.value;window._setE('${cat}',d);})()`,`(function(){let d=window._getE('${cat}')||{};d['${esc_k}_to']=this.value;window._setE('${cat}',d);})()`)}</div>`;if(v.type==="duration")return hoursInput(d[k],sVQ("this.value"),v.name+":");if(v.type==="text")return `<input class="input" value="${esc(d[k])}" placeholder="${v.name}" oninput="${sVQ("this.value")}">`;if(v.type==="number")return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${v.name}</span><input type="number" class="input" style="width:90px" value="${d[k]||""}" placeholder="0" oninput="${sVQ("this.value")}"></div>`;if(v.type==="yesno")return `<div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">${v.name}</span>${toggleBtn(d[k],sV("!"+JSON.stringify(!!d[k])))}</div>`;if(v.type==="rating")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px">${[1,2,3,4,5].map(n=>`<button style="width:36px;height:36px;border-radius:10px;border:1px solid ${d[k]>=n?"var(--yellow)":"var(--input-border)"};background:${d[k]>=n?"rgba(255,217,61,0.15)":"rgba(30,41,59,0.5)"};color:${d[k]>=n?"var(--yellow)":"var(--text5)"};cursor:pointer;font-size:14px;font-weight:600" onclick="${sV(n)}">${n}</button>`).join("")}</div></div>`;if(v.type==="select")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px;flex-wrap:wrap">${(v.options||[]).map(opt=>pillBtn(opt,d[k]===opt,"var(--accent)",sV("'"+opt.replace(/'/g,"\\'")+"'"))).join("")}</div></div>`;return"";}).join("")}</div>`;}
+  if(cat==="sport") return `<div class="form-grid"><input class="input" value="${esc(d.type)}" placeholder="Activity (e.g. gym, running, yoga)" oninput="${sD("type")}"><div style="display:flex;gap:8px;align-items:center"><input type="time" class="input" value="${d.from||""}" onchange="${sD("from")}"><span style="color:var(--accent2)">→</span><input type="time" class="input" value="${d.to||""}" onchange="${sD("to")}"></div><div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">Duration:</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${d.duration||""}" placeholder="0" oninput="${sD("duration")}"><span style="color:var(--text4);font-size:12px">hrs</span></div><input class="input" value="${esc(d.notes)}" placeholder="Notes..." oninput="${sD("notes")}">${saveBtn}</div>`;
+
+  if(cat==="sleep") return `<div class="form-grid"><div style="display:flex;gap:8px;align-items:center"><input type="time" class="input" value="${d.from||""}" onchange="${sD("from")}"><span style="color:var(--accent2)">→</span><input type="time" class="input" value="${d.to||""}" onchange="${sD("to")}"></div><div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">Total hours:</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${d.hours||""}" placeholder="0" oninput="${sD("hours")}"><span style="color:var(--text4);font-size:12px">hrs</span></div><select class="input" onchange="${sD("quality")}"><option value="" ${!d.quality?"selected":""}>Sleep quality...</option><option value="great" ${d.quality==="great"?"selected":""}>😴 Great</option><option value="good" ${d.quality==="good"?"selected":""}>🙂 Good</option><option value="okay" ${d.quality==="okay"?"selected":""}>😐 Okay</option><option value="poor" ${d.quality==="poor"?"selected":""}>😔 Poor</option><option value="terrible" ${d.quality==="terrible"?"selected":""}>😢 Terrible</option></select>${saveBtn}</div>`;
+
+  if(cat==="productivity") return `<div class="form-grid"><div style="display:flex;gap:8px;align-items:center"><input type="time" class="input" value="${d.from||""}" onchange="${sD("from")}"><span style="color:var(--accent2)">→</span><input type="time" class="input" value="${d.to||""}" onchange="${sD("to")}"></div><div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">Hours:</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${d.hours||""}" placeholder="0" oninput="${sD("hours")}"><span style="color:var(--text4);font-size:12px">hrs</span></div><input class="input" value="${esc(d.tasks)}" placeholder="What did you work on?" oninput="${sD("tasks")}">${saveBtn}</div>`;
+
+  if(cat==="brainrot") return `<div class="form-grid"><div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">Hours wasted:</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${d.hours||""}" placeholder="0" oninput="${sD("hours")}"><span style="color:var(--text4);font-size:12px">hrs</span></div><input class="input" value="${esc(d.platform)}" placeholder="Platform (TikTok, Instagram, YouTube...)" oninput="${sD("platform")}"><input class="input" value="${esc(d.notes)}" placeholder="Notes..." oninput="${sD("notes")}">${saveBtn}</div>`;
+
+  if(cat==="food"){
+    const fvs=d.fruitsVegs||[];
+    const fvHtml=state.fvList.map(item=>{
+      const a=fvs.includes(item);
+      return pillBtn(item,a,"var(--accent)",`(function(){let d=window._getD('food');if(!d.fruitsVegs)d.fruitsVegs=[];const i=d.fruitsVegs.indexOf('${item}');if(i>=0)d.fruitsVegs.splice(i,1);else d.fruitsVegs.push('${item}')})()`);
+    }).join("");
+    return `<div class="form-grid"><div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">Shake today?</span><button class="pill" style="border-color:${d.shake?"var(--green)":"var(--input-border)"};background:${d.shake?"var(--green)1A":"rgba(30,41,59,0.5)"};color:${d.shake?"var(--green)":"var(--text4)"}" onclick="window._getD('food').shake=!window._getD('food').shake">${d.shake?"✓ Yes":"No"}</button></div><div><span class="label" style="margin-bottom:8px">Fruits & Vegetables</span><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${fvHtml}</div><div style="display:flex;gap:6px"><input class="input" style="flex:1" id="newFV" placeholder="Add new..." onkeydown="if(event.key==='Enter')window._addFV()"><button class="btn-sm" onclick="window._addFV()">+</button></div></div><input class="input" value="${esc(d.meals)}" placeholder="Other meals / notes..." oninput="${sD("meals")}">${saveBtn}</div>`;
+  }
+
+  if(cat==="feelings"){
+    const fBtns=FEELS.map(f=>pillBtn(f,d.feeling===f,"var(--yellow)",`window._getD('feelings').feeling='${f}'`)).join("");
+    const eBtns=ENRGY.map(e=>pillBtn(e,d.energy===e,"var(--accent)",`window._getD('feelings').energy='${e}'`)).join("");
+    return `<div class="form-grid"><div><span class="label" style="margin-bottom:8px">How are you feeling?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${fBtns}</div></div><div><span class="label" style="margin-bottom:8px">Energy level?</span><div style="display:flex;gap:6px;flex-wrap:wrap">${eBtns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Journal / notes..." oninput="${sD("notes")}">${saveBtn}</div>`;
+  }
+
+  if(cat==="medical"){
+    const visits=d.visits||{};
+    const btns=MEDICAL.map(m=>{
+      const a=!!visits[m.id];
+      return pillBtn(m.l,a,"var(--pink)",`(function(){let d=window._getD('medical');if(!d.visits)d.visits={};d.visits['${m.id}']=!d.visits['${m.id}'];})()`);
+    }).join("");
+    return `<div class="form-grid"><div><span class="label" style="margin-bottom:10px">Appointments today:</span><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div><input class="input" value="${esc(d.notes)}" placeholder="Medical notes..." oninput="${sD("notes")}">${saveBtn}</div>`;
+  }
+
+  if(cat.startsWith("custom_")&&state.custom[cat]){
+    const h=state.custom[cat];
+    return `<div class="form-grid">${h.variables.map((v,i)=>{
+      const k=v.name||"var_"+i;const esc_k=k.replace(/'/g,"\\'");
+      if(v.type==="timeRange")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:8px;align-items:center"><input type="time" class="input" value="${d[k+"_from"]||""}" onchange="window._setD('${cat}','${esc_k}_from',this.value)"><span style="color:var(--accent2)">→</span><input type="time" class="input" value="${d[k+"_to"]||""}" onchange="window._setD('${cat}','${esc_k}_to',this.value)"></div></div>`;
+      if(v.type==="duration")return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${v.name}:</span><input type="number" min="0" max="24" step="0.5" class="input" style="width:75px" value="${d[k]||""}" placeholder="0" oninput="window._setD('${cat}','${esc_k}',this.value)"><span style="color:var(--text4);font-size:12px">hrs</span></div>`;
+      if(v.type==="text")return `<input class="input" value="${esc(d[k])}" placeholder="${v.name}" oninput="window._setD('${cat}','${esc_k}',this.value)">`;
+      if(v.type==="number")return `<div style="display:flex;align-items:center;gap:8px"><span style="color:var(--text3);font-size:13px">${v.name}</span><input type="number" class="input" style="width:90px" value="${d[k]||""}" placeholder="0" oninput="window._setD('${cat}','${esc_k}',this.value)"></div>`;
+      if(v.type==="yesno")return `<div style="display:flex;align-items:center;gap:12px"><span style="color:var(--text3);font-size:13px">${v.name}</span><button class="pill" style="border-color:${d[k]?"var(--green)":"var(--input-border)"};background:${d[k]?"var(--green)1A":"rgba(30,41,59,0.5)"};color:${d[k]?"var(--green)":"var(--text4)"}" onclick="let d=window._getD('${cat}');d['${esc_k}']=!d['${esc_k}']">${d[k]?"✓ Yes":"No"}</button></div>`;
+      if(v.type==="rating")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px">${[1,2,3,4,5].map(n=>`<button style="width:36px;height:36px;border-radius:10px;border:1px solid ${d[k]>=n?"var(--yellow)":"var(--input-border)"};background:${d[k]>=n?"rgba(255,217,61,0.15)":"rgba(30,41,59,0.5)"};color:${d[k]>=n?"var(--yellow)":"var(--text5)"};cursor:pointer;font-size:14px;font-weight:600" onclick="window._setD('${cat}','${esc_k}',${n})">${n}</button>`).join("")}</div></div>`;
+      if(v.type==="select")return `<div><span class="label">${v.name}</span><div style="display:flex;gap:6px;flex-wrap:wrap">${(v.options||[]).map(opt=>{const a=d[k]===opt;return `<button class="pill" style="border-color:${a?"var(--accent)":"var(--input-border)"};background:${a?"var(--accent)1A":"rgba(30,41,59,0.5)"};color:${a?"var(--accent)":"var(--text3)"}" onclick="window._setD('${cat}','${esc_k}','${opt.replace(/'/g,"\\'")}')">${a?"✓ ":""}${opt}</button>`;}).join("")}</div></div>`;
+      return"";
+    }).join("")}${saveBtn}</div>`;
+  }
   return"";
 }
 // ─── Analytics ───
@@ -480,15 +535,7 @@ function renderAnalytics(){
   return h;
 }
 // ─── Main Render ───
-function render(force){
-  // Don't rebuild DOM if user is actively interacting with a form input
-  if(!force){
-    const ae=document.activeElement;
-    if(ae&&(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA')){
-      const card=ae.closest('.habit-body');
-      if(card)return; // user is typing in an open form — skip render
-    }
-  }
+function render(){
   const wd=weekDates(selDate);const dk=fmt(selDate);const today=fmt(new Date());
   const cats=allCats();const cl=catList();const au=activeUserObj();
   const weekFV=new Set();
@@ -728,8 +775,18 @@ function render(force){
 // ─── Event handlers ───
 let modalVars=[];
 // (handlers defined above with setE)
-window._toggleFV=function(item){const d=getE("food")||{shake:false,fruitsVegs:[]};const l=d.fruitsVegs||[];d.fruitsVegs=l.includes(item)?l.filter(x=>x!==item):[...l,item];setE("food",d);};
-window._addFV=function(){const inp=document.getElementById("newFV");if(!inp)return;const t=inp.value.trim();if(!t)return;if(!state.fvList.includes(t))state.fvList.push(t);const d=getE("food")||{shake:false,fruitsVegs:[]};if(!d.fruitsVegs)d.fruitsVegs=[];if(!d.fruitsVegs.includes(t))d.fruitsVegs.push(t);setE("food",d);};
+window._toggleFV=function(item){
+  // No longer used — fruit/veg toggles work directly on draft in renderForm
+};
+window._addFV=function(){
+  const inp=document.getElementById("newFV");if(!inp)return;
+  const t=inp.value.trim();if(!t)return;
+  if(!state.fvList.includes(t)){state.fvList.push(t);save();}
+  const d=window._getD("food");
+  if(!d.fruitsVegs)d.fruitsVegs=[];
+  if(!d.fruitsVegs.includes(t))d.fruitsVegs.push(t);
+  inp.value="";
+};
 window._addGoal=function(){const inp=document.getElementById("goalInput");if(!inp)return;const t=inp.value.trim();if(!t)return;state.goals.push({text:t,done:false});save();render();};
 window._addModalVar=function(type){const info=VTYPES.find(t=>t.id===type);modalVars.push({type,name:info?.label?.split(" (")[0]||type,options:[]});renderModalVars();};
 function renderModalVars(){const el=document.getElementById("mVars");if(!el)return;el.innerHTML=modalVars.map((v,i)=>`<div style="padding:12px;border-radius:12px;background:rgba(30,41,59,0.5);border:1px solid var(--card-border);margin-bottom:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:14px">${VTYPES.find(t=>t.id===v.type)?.icon||""}</span><input class="input" style="flex:1;font-size:13px" value="${v.name}" onchange="modalVars[${i}].name=this.value"><button style="background:none;border:none;color:var(--text4);cursor:pointer;font-size:14px" onclick="modalVars.splice(${i},1);renderModalVars()">✕</button></div><span style="color:var(--text5);font-size:11px">${VTYPES.find(t=>t.id===v.type)?.label||""}</span>${v.type==="select"?`<div style="margin-top:8px"><input class="input" style="font-size:12px" placeholder="Options (comma separated)" value="${(v.options||[]).join(", ")}" onchange="modalVars[${i}].options=this.value.split(',').map(s=>s.trim()).filter(Boolean)"></div>`:""}</div>`).join("");}
