@@ -140,14 +140,45 @@ async function sheetGet(params){
   try{const r=await fetch(url+"?"+qs,{redirect:"follow"});const t=await r.text();return JSON.parse(t);}catch(e){console.error("Sheet GET error:",e);return null;}
 }
 async function sheetPost(body){
-  // Use GET with data param to avoid CORS/redirect issues
   const url=getSheetUrl();if(!url)return null;
-  const params={action:body.action};
-  if(body.tab)params.tab=body.tab;
-  if(body.key)params.key=body.key;
-  if(body.value!==undefined)params.data=JSON.stringify(body.value);
-  const qs=Object.entries(params).map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
-  try{const r=await fetch(url+"?"+qs,{redirect:"follow"});const t=await r.text();return JSON.parse(t);}catch(e){console.error("Sheet POST error:",e);return null;}
+  // Use hidden form + iframe to POST to Google Apps Script
+  // This avoids all CORS issues because form submissions aren't subject to CORS
+  return new Promise((resolve)=>{
+    const id="_postframe_"+Date.now();
+    const iframe=document.createElement("iframe");
+    iframe.name=id;iframe.style.display="none";
+    document.body.appendChild(iframe);
+    
+    const form=document.createElement("form");
+    form.method="POST";form.action=url;form.target=id;
+    form.style.display="none";
+    
+    // Google Apps Script reads e.parameter for GET and e.postData for POST
+    // We send the JSON as a hidden field
+    const input=document.createElement("input");
+    input.type="hidden";input.name="payload";
+    input.value=JSON.stringify(body);
+    form.appendChild(input);
+    
+    document.body.appendChild(form);
+    
+    // Clean up after submission
+    iframe.onload=function(){
+      setTimeout(()=>{
+        try{document.body.removeChild(iframe);}catch{}
+        try{document.body.removeChild(form);}catch{}
+      },500);
+      resolve({ok:true});
+    };
+    // Timeout fallback
+    setTimeout(()=>{
+      try{document.body.removeChild(iframe);}catch{}
+      try{document.body.removeChild(form);}catch{}
+      resolve({ok:true});
+    },10000);
+    
+    form.submit();
+  });
 }
 
 function getUserTabName(){
@@ -810,15 +841,23 @@ window._testConnection=async function(){
 window._forcePush=async function(){
   const msg=document.getElementById("settingsMsg");
   if(!getSheetUrl()){if(msg)msg.innerHTML='<span style="color:var(--red)">Save a URL first</span>';return;}
-  if(msg)msg.innerHTML='<span style="color:var(--text3)">Pushing all data...</span>';
+  if(msg)msg.innerHTML='<span style="color:var(--text3)">Pushing all data... (this may take a few seconds)</span>';
   // Push all users
   for(const u of users){
     const key="habits-"+u.id;
     try{const s=localStorage.getItem(key);if(s)await sheetPost({action:"write",tab:u.name,key:"state",value:JSON.parse(s)});}catch{}
   }
   await sheetPost({action:"writeUsers",value:users});
-  if(msg)msg.innerHTML='<span style="color:var(--green)">✓ All data pushed to Google Sheet!</span>';
-  syncStatus="synced";lastSyncTime=Date.now();render();
+  // Wait a moment for Google to process
+  await new Promise(r=>setTimeout(r,2000));
+  // Verify by reading back
+  const verify=await sheetGet({action:"read",tab:getUserTabName(),key:"state"});
+  if(verify?.ok&&verify.value){
+    if(msg)msg.innerHTML='<span style="color:var(--green)">✓ Verified! Data is in your Google Sheet.</span>';
+  } else {
+    if(msg)msg.innerHTML='<span style="color:var(--yellow)">⚠️ Push sent but couldn\'t verify. Check your sheet — tabs should appear for each user.</span>';
+  }
+  syncStatus="synced";lastSyncTime=Date.now();
 };
 window._forcePull=async function(){
   const msg=document.getElementById("settingsMsg");
