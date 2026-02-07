@@ -189,7 +189,15 @@ async function syncToSheet(){
   if(!getSheetUrl())return;
   syncStatus="syncing";
   try{
-    await sheetPost({action:"write",tab:getUserTabName(),key:"state",value:state});
+    // Build rows: one per entry + special rows for goals, custom, fvList
+    const rows=[];
+    Object.entries(state.entries).forEach(([k,v])=>rows.push({key:k,value:v}));
+    if(state.goals?.length)rows.push({key:"_goals",value:state.goals});
+    if(Object.keys(state.custom||{}).length)rows.push({key:"_custom",value:state.custom});
+    if(state.fvList?.length)rows.push({key:"_fvList",value:state.fvList});
+    
+    // Clear and rewrite the whole tab (clean, no orphan rows)
+    await sheetPost({action:"clearTab",tab:getUserTabName(),rows});
     await sheetPost({action:"writeUsers",value:users});
     syncStatus="synced";lastSyncTime=Date.now();
   }catch(e){
@@ -203,15 +211,24 @@ async function loadFromSheet(){
   if(!getSheetUrl())return false;
   syncStatus="syncing";render();
   try{
-    // Load users first
+    // Load users
     const uRes=await sheetGet({action:"users"});
     if(uRes?.ok&&uRes.value&&Array.isArray(uRes.value)&&uRes.value.length>0){
       users=uRes.value;saveUsers(users);
     }
-    // Load state for active user tab
-    const sRes=await sheetGet({action:"read",tab:getUserTabName(),key:"state"});
-    if(sRes?.ok&&sRes.value){
-      state={entries:{},fvList:[...DEF_FV],goals:[],custom:{},...sRes.value};
+    // Load all rows for active user
+    const sRes=await sheetGet({action:"readAll",tab:getUserTabName()});
+    if(sRes?.ok&&sRes.data){
+      const d=sRes.data;
+      const newState={entries:{},fvList:[...DEF_FV],goals:[],custom:{}};
+      // Separate special keys from entry keys
+      Object.entries(d).forEach(([k,v])=>{
+        if(k==="_goals")newState.goals=v;
+        else if(k==="_custom")newState.custom=v;
+        else if(k==="_fvList")newState.fvList=v;
+        else newState.entries[k]=v; // date_habit entries
+      });
+      state=newState;
       localStorage.setItem(userKey(),JSON.stringify(state));
     }
     syncStatus="synced";lastSyncTime=Date.now();
@@ -882,20 +899,29 @@ window._forcePush=async function(){
   const msg=document.getElementById("settingsMsg");
   if(!getSheetUrl()){if(msg)msg.innerHTML='<span style="color:var(--red)">Save a URL first</span>';return;}
   if(msg)msg.innerHTML='<span style="color:var(--text3)">Pushing all data... (this may take a few seconds)</span>';
-  // Push all users
+  // Push each user's data as rows
   for(const u of users){
     const key="habits-"+u.id;
-    try{const s=localStorage.getItem(key);if(s)await sheetPost({action:"write",tab:u.name,key:"state",value:JSON.parse(s)});}catch{}
+    try{
+      const s=localStorage.getItem(key);
+      if(s){
+        const st=JSON.parse(s);
+        const rows=[];
+        Object.entries(st.entries||{}).forEach(([k,v])=>rows.push({key:k,value:v}));
+        if(st.goals?.length)rows.push({key:"_goals",value:st.goals});
+        if(Object.keys(st.custom||{}).length)rows.push({key:"_custom",value:st.custom});
+        if(st.fvList?.length)rows.push({key:"_fvList",value:st.fvList});
+        await sheetPost({action:"clearTab",tab:u.name,rows});
+      }
+    }catch(e){console.error("Push error for",u.name,e);}
   }
   await sheetPost({action:"writeUsers",value:users});
-  // Wait a moment for Google to process
   await new Promise(r=>setTimeout(r,2000));
-  // Verify by reading back
-  const verify=await sheetGet({action:"read",tab:getUserTabName(),key:"state"});
-  if(verify?.ok&&verify.value){
+  const verify=await sheetGet({action:"readAll",tab:getUserTabName()});
+  if(verify?.ok&&verify.data&&Object.keys(verify.data).length>0){
     if(msg)msg.innerHTML='<span style="color:var(--green)">✓ Verified! Data is in your Google Sheet.</span>';
   } else {
-    if(msg)msg.innerHTML='<span style="color:var(--yellow)">⚠️ Push sent but couldn\'t verify. Check your sheet — tabs should appear for each user.</span>';
+    if(msg)msg.innerHTML='<span style="color:var(--yellow)">⚠️ Push sent but couldn\'t verify. Check your sheet.</span>';
   }
   syncStatus="synced";lastSyncTime=Date.now();
 };
