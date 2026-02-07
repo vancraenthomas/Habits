@@ -137,11 +137,17 @@ function setSheetUrl(url){localStorage.setItem(SHEET_URL_KEY,url);}
 async function sheetGet(params){
   const url=getSheetUrl();if(!url)return null;
   const qs=Object.entries(params).map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
-  try{const r=await fetch(url+"?"+qs);return await r.json();}catch(e){console.error("Sheet GET error:",e);return null;}
+  try{const r=await fetch(url+"?"+qs,{redirect:"follow"});const t=await r.text();return JSON.parse(t);}catch(e){console.error("Sheet GET error:",e);return null;}
 }
 async function sheetPost(body){
+  // Use GET with data param to avoid CORS/redirect issues
   const url=getSheetUrl();if(!url)return null;
-  try{const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)});return await r.json();}catch(e){console.error("Sheet POST error:",e);return null;}
+  const params={action:body.action};
+  if(body.tab)params.tab=body.tab;
+  if(body.key)params.key=body.key;
+  if(body.value!==undefined)params.data=JSON.stringify(body.value);
+  const qs=Object.entries(params).map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
+  try{const r=await fetch(url+"?"+qs,{redirect:"follow"});const t=await r.text();return JSON.parse(t);}catch(e){console.error("Sheet POST error:",e);return null;}
 }
 
 function getUserTabName(){
